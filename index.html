@@ -393,8 +393,8 @@
   }
   // Hourly goals after rolling extra chats forward.
   // Chats done beyond an hour's goal reduce the goals of the hours after it,
-  // split equally; if they don't divide evenly, the leftover ones go to the
-  // LAST hours of the day. Goals never drop below 0; surplus keeps flowing on.
+  // split in proportion to each hour's working time (equal for full hours);
+  // leftover whole chats go to the LAST hours of the day. Goals never drop below 0; surplus keeps flowing on.
   function hourPlan() {
     var list = slots();
     var target = parseFloat(state.target) || 0;
@@ -410,15 +410,27 @@
     for (var i = 0; i < n; i++) {
       var surplus = Math.max(0, hourCount(list[i].key) - eff[i]);
       while (surplus > 0) {
-        var cand = [];
-        for (var j = i + 1; j < n; j++) if (eff[j] > 0) cand.push(j);
+        var cand = [], W = 0;
+        for (var j = i + 1; j < n; j++) if (eff[j] > 0 && list[j].frac > 0) { cand.push(j); W += list[j].frac; }
         if (!cand.length) break;
-        var q = Math.floor(surplus / cand.length), r = surplus % cand.length;
-        var used = 0;
+        // Share the surplus in proportion to each hour's WORKING time (a 40-minute
+        // hour takes 2/3 of what a full hour takes). Whole chats left over go to
+        // the biggest fractional remainders, ties -> the LAST hours of the day.
+        var shares = [], floors = 0;
         for (var k = 0; k < cand.length; k++) {
-          var give = q + (k >= cand.length - r ? 1 : 0); // remainder -> last hours
-          give = Math.min(give, eff[cand[k]]);
-          eff[cand[k]] -= give; rolled[cand[k]] += give; used += give;
+          var exact = surplus * list[cand[k]].frac / W;
+          var fl = Math.floor(exact + 1e-9);
+          shares.push({ idx: cand[k], give: fl, rem: exact - fl });
+          floors += fl;
+        }
+        var order = shares.slice().sort(function (x, y) {
+          return Math.abs(y.rem - x.rem) > 1e-9 ? y.rem - x.rem : y.idx - x.idx;
+        });
+        for (var u = 0; u < surplus - floors && u < order.length; u++) order[u].give += 1;
+        var used = 0;
+        for (var k = 0; k < shares.length; k++) {
+          var give = Math.min(shares[k].give, eff[shares[k].idx]);
+          eff[shares[k].idx] -= give; rolled[shares[k].idx] += give; used += give;
         }
         if (used === 0) break;
         surplus -= used;
